@@ -1,3 +1,4 @@
+# cron_append_dates.yml
 name: Append Date to Diary
 on:
   workflow_dispatch:
