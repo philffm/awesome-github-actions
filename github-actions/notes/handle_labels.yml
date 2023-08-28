@@ -1,0 +1,162 @@
+# handle_labels.yml
+name: Handle Labels
+on:
+  issues:
+    types:
+      - labeled
+
+
+jobs:
+    send-epub:
+      runs-on: ubuntu-latest
+      if: contains(github.event.issue.labels.*.name, 'kindle')
+      steps:
+        - name: Wait 20 seconds if 'summarized' tag is not present
+          id: wait-20-seconds
+          run: |
+            # only if the issue does not have the 'summarized' tag, wait 20 seconds
+            if ! echo "${{ github.event.issue.labels.*.name }}" | grep -q "summarized"; then
+              echo "Waiting for 20 seconds..."
+              sleep 20
+            fi
+        - name: Check if the added label is 'kindle'
+          id: kindle-label-check
+          run: |
+            ADDED_LABEL=${{ github.event.label.name }}
+            if [ "$ADDED_LABEL" != "kindle" ]; then
+              echo "The added label is not 'kindle', exiting..."
+              # exit with a neutral status code so that the workflow doesn't fail
+              exit 78
+            fi
+        - name: Install pandoc
+          if: success()
+          run: sudo apt-get install -y pandoc
+          
+        - name: Install jq
+          run: sudo apt-get install -y jq
+        
+        - name: Install ImageMagick
+          if: success()
+          run: sudo apt-get install -y imagemagick
+
+        - name: Set up sendemail
+          if: success()
+          run: sudo apt-get install sendemail libio-socket-ssl-perl libnet-ssleay-perl
+
+        - name: Generate epub and send to Kindle
+          run: |
+              # Extract issue number, title, body, and labels from the event payload
+              ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+              ISSUE_TITLE=$(jq --raw-output '.issue.title' $GITHUB_EVENT_PATH)
+              ISSUE_BODY=$(jq --raw-output '.issue.body' $GITHUB_EVENT_PATH)
+              ISSUE_LABELS=$(jq --raw-output '.issue.labels[]?.name' $GITHUB_EVENT_PATH)
+          
+              # assume author from the domain of the most used URL in the issue body
+              ISSUE_AUTHOR=$(echo "$ISSUE_BODY" | grep -oP 'http(s)?://[^/\n]+' | grep -oP '(?<=\/\/)[^/]*' | sort | uniq -c | sort -nr | head -n1 | awk '{print $2}'); ISSUE_AUTHOR=${ISSUE_AUTHOR:-"Web Article"}
+              # Create a slug from the issue title
+              ISSUE_SLUG=$(echo "$ISSUE_TITLE" | iconv -t ascii//TRANSLIT | sed -r s/[~\^]+//g | sed -r s/[^a-zA-Z0-9]+/-/g | sed -r s/^-+\|-+$//g | tr A-Z a-z)
+
+              # if issue has tag "summarized" then append all comments to the issue body - otherwise wait 20 seconds
+              if echo "$ISSUE_LABELS" | grep -q "summarized"; then
+              ISSUE_COMMENTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" | jq --raw-output '.[] | select(type=="object" and has("body")) | "\n\n---\n\n" + .body')
+              ISSUE_BODY="$ISSUE_COMMENTS $ISSUE_BODY"
+              fi
+
+              # Save the issue content as a markdown file
+              echo -e "# $ISSUE_TITLE\n\n$ISSUE_BODY" > "/tmp/$ISSUE_SLUG.md"
+
+
+              # generate a cover image from the first image in the issue
+              # extract the first image from the issue, if any
+              # ISSUE_IMAGE=$(echo "$ISSUE_BODY" | grep -o 'http[s]\?://[^ )]*' | grep -iE '\.(jpg|jpeg|png|gif)' | head -n 1) && [ -n "$ISSUE_IMAGE" ] && curl -s "$ISSUE_IMAGE" > "/tmp/$ISSUE_SLUG.jpg" || curl -s "https://picsum.photos/600/800" > "/tmp/$ISSUE_SLUG.jpg"
+
+              # resize the image and add a title in 28pt dejavu font
+              # convert "/tmp/$ISSUE_SLUG.jpg" -resize 600x800 -gravity center -font DejaVu-Sans -pointsize 28 -annotate 0 "$ISSUE_TITLE" "/tmp/$ISSUE_SLUG.jpg" 
+              
+              # generate epub metadata to be used by pandoc
+              echo -e "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+              <package xmlns=\"http://www.idpf.org/2007/opf\" unique-identifier=\"BookID\" version=\"2.0\">
+              
+              <dc:title>$ISSUE_TITLE</dc:title>
+              <dc:creator opf:role="aut" opf:file-as="$ISSUE_AUTHOR">$ISSUE_AUTHOR</dc:creator>
+              <dc:language>en</dc:language>
+              <dc:identifier id="BookID" opf:scheme="URI">urn:uuid:$ISSUE_SLUG</dc:identifier>
+              </metadata>
+
+              </package>" > "/tmp/$ISSUE_SLUG.opf"
+                      
+              pandoc "/tmp/$ISSUE_SLUG.md" --epub-metadata="/tmp/$ISSUE_SLUG.opf" -M title="$ISSUE_TITLE" -M author="$ISSUE_AUTHOR" -M lang=en --epub-metadata="/tmp/$ISSUE_SLUG.opf" -o "/tmp/$ISSUE_SLUG.epub"
+
+              # Use the ISSUE_TITLE and ISSUE_AUTHOR directly in the Pandoc command
+              # Send the epub file to an email address
+              sendemail -f philipp.wornath@gmail.com -t drschnitzel@kindle.com -u "Convert $ISSUE_SLUG.epub" -m "Konvertieren Sie bitte $ISSUE_SLUG.epub" -a "/tmp/$ISSUE_SLUG.epub" -s smtp.gmail.com:587 -xu philipp.wornath@gmail.com -xp ${{ secrets.EMAIL_PASSWORD }} -o tls=yes
+    save_md:
+      runs-on: ubuntu-latest
+      if: contains(github.event.issue.labels.*.name, 'md')
+      steps:
+        - name: Check if the added label is 'md'
+          id: md-label-check
+          run: |
+            ADDED_LABEL=${{ github.event.label.name }}
+            if [ "$ADDED_LABEL" != "md" ]; then
+              echo "The added label is not 'md', exiting..."
+              exit 78
+            fi
+  
+        - name: Check out repository
+          uses: actions/checkout@v2
+  
+        - name: Save issue content as markdown
+          run: |
+            # Extract issue number, title, body, and labels from the event payload
+            ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+            ISSUE_TITLE=$(jq --raw-output '.issue.title' $GITHUB_EVENT_PATH)
+            ISSUE_BODY=$(jq --raw-output '.issue.body' $GITHUB_EVENT_PATH)
+            ISSUE_LABELS=$(jq --raw-output '.issue.labels[]?.name' $GITHUB_EVENT_PATH)
+  
+            # if issue has tag "summarized" then append all comments to the issue body
+            if echo "$ISSUE_LABELS" | grep -q "summarized"; then
+              ISSUE_COMMENTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments" | jq --raw-output '.[] | select(type=="object" and has("body")) | "\n\n---\n\n" + .body')
+              ISSUE_BODY="$ISSUE_COMMENTS $ISSUE_BODY"
+            fi
+  
+            # Create a slug from the issue title
+            ISSUE_SLUG=$(echo "$ISSUE_TITLE" | iconv -t ascii//TRANSLIT | sed -r s/[~\^]+//g | sed -r s/[^a-zA-Z0-9]+/-/g | sed -r s/^-+\|-+$//g | tr A-Z a-z)
+  
+            # Determine the directory to save the markdown file
+            DIRECTORY="resources/others"
+            if echo "$ISSUE_LABELS" | grep -q "article"; then
+              DIRECTORY="resources/articles"
+            elif echo "$ISSUE_LABELS" | grep -q "page"; then
+              DIRECTORY="resources/pages"
+            fi
+  
+            # Create the directory if it doesn't exist
+            mkdir -p $DIRECTORY
+  
+            # Save the issue content as a markdown file
+            echo -e "# $ISSUE_TITLE\n\n$ISSUE_BODY" > "$DIRECTORY/$ISSUE_SLUG.md"
+
+            # find journal.md file and append the issue link with first title (#) as a markdown link
+
+            # find the journal.md file
+            JOURNAL_FILE=$(find . -name "journal.md" -print -quit)
+            echo "Journal file: $JOURNAL_FILE"
+            
+            #  link to md file
+            MD_LINK="[$ISSUE_TITLE](../$DIRECTORY/$ISSUE_SLUG.md)"
+            # append the md link to the journal.md file
+            echo -e "\n\n$MD_LINK" >> "$JOURNAL_FILE"
+            # also add ISSUE_COMMENTS to the journal.md file
+            echo -e "\n\n$ISSUE_COMMENTS" >> "$JOURNAL_FILE"
+
+            
+
+
+        - name: Commit and push
+          run: |
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+            git add .
+            git commit -m "Save issue #$ISSUE_NUMBER as markdown"
+            git push

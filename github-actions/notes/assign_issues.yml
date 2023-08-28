@@ -1,0 +1,107 @@
+# assign_issues.yml
+# This GitHub Actions workflow file assigns new issues to a specific user and generates a summary of the issue if it contains the 'article' label and does not contain the 'summarized' label. The summary is generated using the OpenAI API and added as a comment to the issue. The workflow also adds the 'summarized' label to the issue and assigns it to the specified user.
+name: Assign New Issues to @philffm
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+      
+
+jobs:
+  generate_summary:
+    runs-on: ubuntu-latest
+    # if it doesn't contain summarized and contains article
+    if: contains(github.event.issue.labels.*.name, 'article') && !contains(github.event.issue.labels.*.name, 'summarized')
+    steps:
+      - name: Check label
+        id: check-label
+        run: echo "Label 'article' found, proceeding"
+      - name: Install curl and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl jq
+      - name: Generate summary
+        run: |
+
+          if [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            ISSUE_BODY=$(jq --raw-output '.comment.body' $GITHUB_EVENT_PATH)
+            if [[ "$ISSUE_BODY" != *"summarise"* ]]; then
+              echo "No summary generation requested"
+              exit 0
+            fi
+            ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+            ISSUE_BODY=$(jq --raw-output '.issue.body' $GITHUB_EVENT_PATH)
+          else
+            ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+            ISSUE_BODY=$(jq --raw-output '.issue.body' $GITHUB_EVENT_PATH)
+          fi
+
+          # limit to 400 words
+          ISSUE_BODY=$(echo $ISSUE_BODY | cut -d " " -f -400)
+          
+          # Convert to JSON
+          JSON_ISSUE_BODY=$(echo $ISSUE_BODY | jq -R .)
+          echo $JSON_ISSUE_BODY
+  
+          # Generate summary using OpenAI API
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.OPENAI_SECRET_KEY }}" \
+          -d '{
+            "model": "gpt-3.5-turbo",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a helpful assistant summarizing articles to maximum 200 words (explain it like i am five (ELI5))"
+              },
+              {
+                "role": "user",
+                "content": "Sell this article to me in a fun way (Headline: ## ✨ Summary), summarise. Add up to five fitting topic tags (1-3 very generic, up to 2 more specific) about the summarised text to the end of the summary in the format: ## Tags (new line) #tag1 #tag2 #tag3... . Explain if and how this could be relevant as a UX designer with a concrete (possibly humorous) example (Headline: ## Personal Relevance) - in MD format"
+
+              },
+              {
+                "role": "user",
+                "content": '"${JSON_ISSUE_BODY}"'
+              }
+            ]
+          }')
+          echo $RESPONSE
+          ISSUE_SUMMARY=$(echo $RESPONSE | jq --raw-output '.choices[0].message.content')
+
+          # Print summary
+          echo "The summary of the issue is: $ISSUE_SUMMARY"
+
+          # using the issue_summmary create
+          
+          # Add summary as a comment to the issue
+          SUMMARY_JSON=$(jq -n --arg is "$ISSUE_SUMMARY" '{body: $is}')
+
+          curl -s -X POST https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/comments \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "$SUMMARY_JSON"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Add label
+        run: |
+          ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+          curl -s -X POST https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER/labels \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"labels": ["summarized"]}'
+  assign_issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign Issue to @philffm
+        run: |
+          # Extract issue number from the event payload
+          ISSUE_NUMBER=$(jq --raw-output '.issue.number' $GITHUB_EVENT_PATH)
+
+          # Assign the issue to the specified user
+          curl -X POST -H "Authorization: Bearer ${{ secrets.ACTION_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               https://api.github.com/repos/philffm/notes/issues/${ISSUE_NUMBER}/assignees \
+               --data '{"assignees": ["philffm"]}'
+        env:
+          YOUR_PERSONAL_ACCESS_TOKEN: ${{ secrets.ACTION_TOKEN }}

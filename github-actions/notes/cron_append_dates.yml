@@ -1,0 +1,89 @@
+name: Append Date to Diary
+on:
+  workflow_dispatch:
+  schedule:
+    # This will trigger the workflow every day at midnight
+    - cron: '0 0 * * *'
+
+jobs:
+  append_date:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0  # Fetch all history so we can push back to it
+
+      - name: Append date to journal.md
+        run: |
+          # Find the first journal.md file in a directory that doesn't s tart with a dot
+          DIARY_FILE_PATH=$(find . -type d -not -path './.*' -print0 | xargs -0 -I{} find {} -maxdepth 1 -name 'journal.md' | head -n 1)
+          
+          # If journal.md is found, append the current date
+          if [ ! -z "$DIARY_FILE_PATH" ]; then
+            echo "## $(date -u +'%Y-%m-%d')" >> "$DIARY_FILE_PATH"
+          else
+            echo "journal.md not found"
+            exit 1
+          fi
+
+      - name: Install curl and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl jq
+
+      - name: Generate day briefing
+        run: |
+          # get today's date in string format
+          DATE=$(date -u +'%Y-%m-%d')
+          # print date in json compatible
+          DATE=$(echo "$DATE" | jq -R .)
+
+          # prompt in json compatible format (What is the daily stoic for date)
+          PROMPT=$(echo "Craft an inspiring daily briefing including a quote, a fun fact and / or sth inspiring to research that day. Just as an exampl pick one of the topics (or connect 2 of them ): stoicism, marxism, hegelianism, sustainability, camping, ecovillages, hostels, community, people, connecting things, forced connections, design, urbanism, cycling etc.  70-100 words max!" | jq -R .)
+
+
+
+          # Generate summary using OpenAI API
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer ${{ secrets.OPENAI_SECRET_KEY }}" \
+          -d '{
+            "model": "gpt-3.5-turbo",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a helpful assistant delivering a short (max 100-200 words) daily briefing"
+              },
+              {
+                "role": "user",
+                "content": '"$PROMPT"'
+              }
+             
+            ]
+          }')
+
+        
+          echo $RESPONSE
+          if [ -z "$RESPONSE" ]; then
+            echo "Error: Empty response or invalid JSON"
+            exit 1
+          fi
+
+          DAY_BRIEFING=$(echo "$RESPONSE" | jq --raw-output '.choices[0].message.content')
+
+          # Find the first journal.md file in a directory that doesn't s tart with a dot
+          DIARY_FILE_PATH=$(find . -type d -not -path './.*' -print0 | xargs -0 -I{} find {} -maxdepth 1 -name 'journal.md' | head -n 1)
+          
+          # If journal.md is found, append the current date
+          if [ ! -z "$DIARY_FILE_PATH" ]; then
+          # echo "## $(date -u +'%Y-%m-%d')" >> "$DIARY_FILE_PATH"
+          echo "$DAY_BRIEFING" >> "$DIARY_FILE_PATH"
+          else
+            echo "journal.md not found"
+            exit 1
+          fi
+
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git diff --quiet && git diff --staged --quiet || (git add . ; git commit -m "Append date to journal.md" ; git push)
