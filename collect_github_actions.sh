@@ -8,8 +8,8 @@ mkdir -p "$DEST_DIR"
 
 # If README.md doesn't exist, create it
 if [[ ! -f "$DEST_DIR/README.md" ]]; then
-    touch "$DEST_DIR/README.md"
-    echo "# Collected GitHub Actions" > "$DEST_DIR/README.md"
+    touch "README.md"
+    echo "# Collected GitHub Actions" > "README.md"
 fi
 
 # Use find to recursively search for .github/workflows directories
