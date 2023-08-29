@@ -4,6 +4,11 @@ This repository contains a collection of GitHub Actions workflows that I've foun
 
 Just add the workflows you want to your repository's `.github/workflows` directory and you're good to go!
 
+## Other awesome GitHub Actions workflows collections
+
+https://github.com/sdras/awesome-actions
+https://github.com/GuillaumeFalourd/useful-actions
+
 ## Second Brain workflows
 
 I've recently wrote an article about how I use GitHub Actions to automate my second brain. You can [find the article here](https://medium.com/design-bootcamp/automating-my-second-brain-how-technology-makes-information-management-effortless-afb2a1e4ab11)
